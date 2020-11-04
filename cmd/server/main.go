@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"demo/pkg/demoerr"
 	"demo/pkg/pb"
-	"demo/pkg/pb/demoerr"
 	"encoding/base64"
 	"errors"
 	"fmt"

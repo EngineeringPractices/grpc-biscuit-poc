@@ -185,8 +185,6 @@ func flattenProtoMessage(msg protoreflect.Message) (map[biscuit.String]biscuit.A
 			fieldName = func(key interface{}) string {
 				return fmt.Sprintf("%s.%v", field.Name(), key)
 			}
-		case field.IsExtension():
-			// TODO ???
 		default:
 			elts = map[interface{}]protoreflect.Value{struct{}{}: msg.Get(field)}
 			fieldName = func(key interface{}) string {
@@ -227,7 +225,7 @@ func flattenProtoMessage(msg protoreflect.Message) (map[biscuit.String]biscuit.A
 					ts := elt.Message().Interface().(*timestamppb.Timestamp)
 					out[biscuit.String(fieldName(key))] = biscuit.Date(ts.AsTime())
 				default:
-					// recurse until we get basic type only
+					// recurse until we only get basic types
 					subout, err := flattenProtoMessage(elt.Message())
 					if err != nil {
 						return nil, err
@@ -237,9 +235,8 @@ func flattenProtoMessage(msg protoreflect.Message) (map[biscuit.String]biscuit.A
 						out[biscuit.String(name)] = v
 					}
 				}
-
-			case protoreflect.GroupKind: // deprecated
-				return nil, fmt.Errorf("authorization: unsupported protoreflect kind: %v", field.Kind())
+			case protoreflect.GroupKind: // deprecated proto2 feature
+				return nil, errors.New("authorization: group fields are not supported")
 			default:
 				return nil, fmt.Errorf("authorization: unsupported protoreflect kind: %v", field.Kind())
 			}

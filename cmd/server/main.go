@@ -111,6 +111,7 @@ func authzInterceptorFunc(ctx context.Context, req interface{}, info *grpc.Unary
 
 	if err := verifier.Verify(); err != nil {
 		fmt.Println("---------------------------------------------------------")
+		fmt.Printf("Access denied: %s\n", err)
 		fmt.Printf("Verifier world: %s\n", verifier.PrintWorld())
 		fmt.Println("Ambient facts:")
 		for _, f := range debugFacts {

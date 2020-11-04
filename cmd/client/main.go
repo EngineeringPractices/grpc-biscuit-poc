@@ -20,23 +20,28 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+var caveats = []string{
+	// require an authority allow_method fact to have been generated
+	`*authorized() <- allow_method(#authority, $0)`,
+}
+
 var adminPolicy = []string{
 	// allow Create, Read, Update, Delete with no conditions
-	`*allow_method(#authority, $0)
+	`*allow_method($0)
 	<-	method(#ambient, $0)
 	@ 	$0 in ["/demo.api.v1.Demo/Create", "/demo.api.v1.Demo/Read", "/demo.api.v1.Demo/Update", "/demo.api.v1.Demo/Delete"]`,
 }
 
 var developerPolicy = []string{
 	// allow Create, Delete if env is dev
-	`*allow_method(#authority, $0)
+	`*allow_method($0)
 		<-	method(#ambient, $0), 
 			arg(#ambient, $1, $2) 
 		@ 	$0 in ["/demo.api.v1.Demo/Create", "/demo.api.v1.Demo/Delete"], 
 			$1 == "env", 
 			$2 == "DEV"`,
 	// allow Read and Update in dev or staging
-	`*allow_method(#authority, $0)
+	`*allow_method($0)
 		<-	method(#ambient, $0),
 			arg(#ambient, $1, $2)
 		@ 	$0 in ["/demo.api.v1.Demo/Read", "/demo.api.v1.Demo/Update"],
@@ -46,7 +51,7 @@ var developerPolicy = []string{
 
 var guestPolicy = []string{
 	// allow Status with no conditions
-	`*allow_method(#authority, $0)
+	`*allow_method($0)
 		<-	method(#ambient, $0) 
 		@ 	$0 == "/demo.api.v1.Demo/Status"`,
 }
@@ -172,11 +177,6 @@ func login(role string) (string, error) {
 		rules = guestPolicy
 	default:
 		return "", fmt.Errorf("unknown role: %s", role)
-	}
-
-	caveats := []string{
-		// require an authority allow_method fact to have been generated
-		`*authorized() <- allow_method(#authority, $0)`,
 	}
 
 	builder := biscuit.NewBuilder(rand.Reader, root)

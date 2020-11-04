@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"demo/pkg/demoerr"
+	"demo/pkg/authorization"
 	"demo/pkg/pb"
 	"encoding/base64"
 	"errors"
@@ -140,7 +140,7 @@ func testAuthorization(role string, token string) {
 
 func printStatus(role, envName, method string, err error) {
 	var auth, msg string
-	if errors.Is(err, demoerr.ErrNotAuthorized) {
+	if errors.Is(err, authorization.ErrNotAuthorized) {
 		auth = "DENIED"
 		s, _ := status.FromError(err)
 		msg = s.Message()

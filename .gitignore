@@ -1,0 +1,3 @@
+.gobincache/
+build/
+*.key

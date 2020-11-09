@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"demo/pkg/authorization"
 	"demo/pkg/pb"
 	"encoding/base64"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/flynn/biscuit-go"
+	"github.com/flynn/biscuit-go/cookbook/signedbiscuit"
 	"github.com/flynn/biscuit-go/parser"
 	"github.com/flynn/biscuit-go/sig"
 	"google.golang.org/grpc"
@@ -68,6 +70,12 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+
+		token, err = signToken(token)
+		if err != nil {
+			panic(err)
+		}
+
 		testAuthorization(role, token)
 	}
 
@@ -80,6 +88,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	attToken, err = signToken(attToken)
+	if err != nil {
+		panic(err)
+	}
+
 	testAuthorization("attenuated", attToken)
 }
 
@@ -156,15 +170,30 @@ func printStatus(role, envName, method string, err error) {
 
 // login simulate an authorization server returning a biscuit
 func login(role string) (string, error) {
-	privBytes, err := ioutil.ReadFile("./private.demo.key")
+	rootPrivBytes, err := ioutil.ReadFile("./root.private.demo.key")
 	if err != nil {
 		return "", err
 	}
-	sk, err := sig.NewPrivateKey(privBytes)
+	sk, err := sig.NewPrivateKey(rootPrivBytes)
 	if err != nil {
 		return "", err
 	}
 	root := sig.NewKeypair(sk)
+
+	userPubKey, err := ioutil.ReadFile("./user.public.demo.key")
+	if err != nil {
+		return "", err
+	}
+
+	audience := "http://audience.local"
+	audiencePrivKeyBytes, err := ioutil.ReadFile("./audience.private.demo.key")
+	if err != nil {
+		return "", err
+	}
+	audiencePrivKey, err := x509.ParseECPrivateKey(audiencePrivKeyBytes)
+	if err != nil {
+		return "", err
+	}
 
 	var rules []string
 	switch role {
@@ -180,6 +209,16 @@ func login(role string) (string, error) {
 	}
 
 	builder := biscuit.NewBuilder(rand.Reader, root)
+	builder, err = signedbiscuit.WithSignableFacts(builder, audience, audiencePrivKey, userPubKey, time.Now().Add(5*time.Minute), &signedbiscuit.Metadata{
+		ClientID:  "",
+		IssueTime: time.Now(),
+		UserEmail: "user@email.com",
+		UserID:    "userID",
+	})
+	if err != nil {
+		return "", err
+	}
+
 	p := parser.New()
 	for _, r := range rules {
 		if err := builder.AddAuthorityRule(p.Must().Rule(r)); err != nil {
@@ -241,4 +280,40 @@ func attenuate(token string) (string, error) {
 	}
 
 	return base64.URLEncoding.EncodeToString(ser), nil
+}
+
+func signToken(token string) (string, error) {
+	decToken, err := base64.URLEncoding.DecodeString(token)
+	if err != nil {
+		return "", err
+	}
+
+	rootPubBytes, err := ioutil.ReadFile("./root.public.demo.key")
+	if err != nil {
+		return "", err
+	}
+	rootPubKey, err := sig.NewPublicKey(rootPubBytes)
+	if err != nil {
+		return "", err
+	}
+
+	userPrivKeyBytes, err := ioutil.ReadFile("./user.private.demo.key")
+	if err != nil {
+		return "", err
+	}
+	userPrivKey, err := x509.ParseECPrivateKey(userPrivKeyBytes)
+	if err != nil {
+		return "", err
+	}
+	userKeypair, err := signedbiscuit.NewECDSAKeyPair(userPrivKey)
+	if err != nil {
+		return "", err
+	}
+
+	signedToken, err := signedbiscuit.Sign(decToken, rootPubKey, userKeypair)
+	if err != nil {
+		return "", err
+	}
+
+	return base64.URLEncoding.EncodeToString(signedToken), nil
 }

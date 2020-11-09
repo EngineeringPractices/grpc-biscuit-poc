@@ -45,7 +45,7 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	pk, err := ioutil.ReadFile("./public.demo.key")
+	rootPubKey, err := ioutil.ReadFile("./root.public.demo.key")
 	if err != nil {
 		panic(err)
 	}
@@ -55,7 +55,7 @@ func main() {
 		panic(err)
 	}
 
-	i, err := authorization.NewBiscuitInterceptor(pk, logger.Named("biscuit-interceptor"))
+	i, err := authorization.NewBiscuitInterceptor(rootPubKey, logger.Named("biscuit-interceptor"))
 	if err != nil {
 		panic(err)
 	}

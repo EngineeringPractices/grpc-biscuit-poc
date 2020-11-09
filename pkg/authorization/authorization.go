@@ -2,12 +2,16 @@ package authorization
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"math"
 
 	"github.com/flynn/biscuit-go"
+	"github.com/flynn/biscuit-go/cookbook/signedbiscuit"
 	"github.com/flynn/biscuit-go/sig"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -135,6 +139,21 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 		debugFacts = append(debugFacts, argFact.String())
 	}
 
+	audiencePubKeyBytes, err := ioutil.ReadFile("./audience.public.demo.key")
+	if err != nil {
+		return err
+	}
+	audiencePubKey, err := x509.ParsePKIXPublicKey(audiencePubKeyBytes)
+	if err != nil {
+		return err
+	}
+
+	var signatureMetas *signedbiscuit.UserSignatureMetadata
+	v.Verifier, signatureMetas, err = signedbiscuit.WithSignatureVerification(v.Verifier, "http://audience.local", audiencePubKey.(*ecdsa.PublicKey))
+	if err != nil {
+		return fmt.Errorf("failed to create signature: %w", err)
+	}
+
 	if err := v.Verify(); err != nil {
 		v.logger.Warn("failed to verify biscuit",
 			zap.Error(err),
@@ -143,6 +162,15 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 		)
 		return ErrNotAuthorized
 	}
+
+	v.logger.Info(
+		"success verifying signed biscuit",
+		zap.String("userID", signatureMetas.UserID),
+		zap.String("userEmail", signatureMetas.UserEmail),
+		zap.String("issueTime", signatureMetas.IssueTime.String()),
+		zap.String("signatureTimestamp", signatureMetas.UserSignatureTimestamp.String()),
+		zap.Binary("signatureNonce", signatureMetas.UserSignatureNonce),
+	)
 
 	return nil
 }

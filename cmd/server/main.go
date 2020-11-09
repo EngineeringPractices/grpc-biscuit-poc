@@ -8,8 +8,8 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
-	"os"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
@@ -50,7 +50,12 @@ func main() {
 		panic(err)
 	}
 
-	i, err := authorization.NewBiscuitInterceptor(pk, log.New(os.Stdout, "authorization: ", 0))
+	logger, err := zap.NewProduction()
+	if err != nil {
+		panic(err)
+	}
+
+	i, err := authorization.NewBiscuitInterceptor(pk, logger.Named("biscuit-interceptor"))
 	if err != nil {
 		panic(err)
 	}

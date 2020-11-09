@@ -5,10 +5,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
+	"math"
 
 	"github.com/flynn/biscuit-go"
 	"github.com/flynn/biscuit-go/sig"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -28,11 +29,11 @@ type BiscuitInterceptor interface {
 }
 
 type biscuitInterceptor struct {
-	logger *log.Logger
+	logger *zap.Logger
 	pubkey sig.PublicKey
 }
 
-func NewBiscuitInterceptor(rootPubKey []byte, logger *log.Logger) (BiscuitInterceptor, error) {
+func NewBiscuitInterceptor(rootPubKey []byte, logger *zap.Logger) (BiscuitInterceptor, error) {
 	pubkey, err := sig.NewPublicKey(rootPubKey)
 	if err != nil {
 		return nil, err
@@ -45,8 +46,6 @@ func NewBiscuitInterceptor(rootPubKey []byte, logger *log.Logger) (BiscuitInterc
 }
 
 func (i *biscuitInterceptor) Unary(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
-	i.logger.Printf("unary interceptor %s %T", info.FullMethod, req)
-
 	verifier, err := i.newVerifierFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -60,8 +59,6 @@ func (i *biscuitInterceptor) Unary(ctx context.Context, req interface{}, info *g
 }
 
 func (i *biscuitInterceptor) Stream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	i.logger.Printf("stream interceptor %s", info.FullMethod)
-
 	verifier, err := i.newVerifierFromCtx(ss.Context())
 	if err != nil {
 		return err
@@ -75,7 +72,7 @@ func (i *biscuitInterceptor) Stream(srv interface{}, ss grpc.ServerStream, info 
 
 type grpcVerifier struct {
 	biscuit.Verifier
-	logger *log.Logger
+	logger *zap.Logger
 }
 
 func (i *biscuitInterceptor) newVerifierFromCtx(ctx context.Context) (*grpcVerifier, error) {
@@ -117,14 +114,10 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 			return errors.New("authorization: invalid request")
 		}
 
-		var err error
-		fields, err = flattenProtoMessage(protoMsg.ProtoReflect())
-		if err != nil {
-			return err
-		}
+		fields = v.flattenProtoMessage(protoMsg.ProtoReflect())
 	}
 
-	var debugFacts []string
+	debugFacts := make([]string, 0, len(fields)+1)
 	// Add request method and arguments to the verifier
 	methodFact := biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "method",
@@ -143,21 +136,18 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 	}
 
 	if err := v.Verify(); err != nil {
-		v.logger.Println("---------------------------------------------------------")
-		v.logger.Printf("access denied: %s\n", err)
-		v.logger.Printf("verifier world: %s\n", v.PrintWorld())
-		v.logger.Println("ambient facts:")
-		for _, f := range debugFacts {
-			v.logger.Printf("\t%s\n", f)
-		}
-		v.logger.Println("---------------------------------------------------------")
+		v.logger.Warn("failed to verify biscuit",
+			zap.Error(err),
+			zap.String("world", v.PrintWorld()),
+			zap.Strings("ambient-facts", debugFacts),
+		)
 		return ErrNotAuthorized
 	}
 
 	return nil
 }
 
-func flattenProtoMessage(msg protoreflect.Message) (map[biscuit.String]biscuit.Atom, error) {
+func (v *grpcVerifier) flattenProtoMessage(msg protoreflect.Message) map[biscuit.String]biscuit.Atom {
 	fields := msg.Descriptor().Fields()
 	out := make(map[biscuit.String]biscuit.Atom)
 	for i := 0; i < fields.Len(); i++ {
@@ -194,53 +184,75 @@ func flattenProtoMessage(msg protoreflect.Message) (map[biscuit.String]biscuit.A
 
 		for key, elt := range elts {
 			switch field.Kind() {
-			case protoreflect.BoolKind: // TODO (bool)
+			case protoreflect.BoolKind:
+				if elt.Bool() {
+					out[biscuit.String(fieldName(key))] = biscuit.Integer(1)
+				} else {
+					out[biscuit.String(fieldName(key))] = biscuit.Integer(0)
+				}
 			case protoreflect.EnumKind:
 				// swap the enum value to its name from the definition
 				// and use it as a string on biscuit side
 				out[biscuit.String(fieldName(key))] = biscuit.String(field.Enum().Values().ByNumber(elt.Enum()).Name())
-			case protoreflect.Int32Kind: // TODO (int32)
-			case protoreflect.Sint32Kind: // TODO (int32)
-			case protoreflect.Uint32Kind: // TODO (uint32)
+			case protoreflect.Int32Kind:
+				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
+			case protoreflect.Sint32Kind:
+				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
+			case protoreflect.Uint32Kind:
+				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Uint())
 			case protoreflect.Int64Kind:
 				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
 			case protoreflect.Sint64Kind:
 				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.Uint64Kind: // TODO (uint64)
-			case protoreflect.Sfixed32Kind: // TODO (int32)
-			case protoreflect.Fixed32Kind: // TODO (uint32)
-			case protoreflect.FloatKind: // TODO (float32)
+			case protoreflect.Uint64Kind:
+				if elt.Uint() > math.MaxInt64 {
+					v.logger.Warn("uint64 field does not fit in int64", zap.String("field", fieldName(key)))
+					continue
+				}
+				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
+			case protoreflect.Sfixed32Kind:
+				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
+			case protoreflect.Fixed32Kind:
+				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Uint())
+			case protoreflect.FloatKind:
+				v.logger.Warn("float field is not supported", zap.String("field", fieldName(key)))
 			case protoreflect.Sfixed64Kind:
 				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.Fixed64Kind: // TODO (uint64)
-			case protoreflect.DoubleKind: // TODO (float64)
+			case protoreflect.Fixed64Kind:
+				if elt.Uint() > math.MaxInt64 {
+					v.logger.Warn("uint64 field does not fit in int64", zap.String("field", fieldName(key)))
+					continue
+				}
+				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
+			case protoreflect.DoubleKind:
+				v.logger.Warn("double field is not supported", zap.String("field", fieldName(key)))
 			case protoreflect.StringKind:
 				out[biscuit.String(fieldName(key))] = biscuit.String(elt.String())
 			case protoreflect.BytesKind:
 				out[biscuit.String(fieldName(key))] = biscuit.Bytes(elt.Bytes())
 			case protoreflect.MessageKind:
-				//
 				switch elt.Message().Descriptor().FullName() {
 				case "google.protobuf.Timestamp":
 					ts := elt.Message().Interface().(*timestamppb.Timestamp)
 					out[biscuit.String(fieldName(key))] = biscuit.Date(ts.AsTime())
 				default:
 					// recurse until we only get basic types
-					subout, err := flattenProtoMessage(elt.Message())
-					if err != nil {
-						return nil, err
-					}
+					// concatenating sub field name with parent field name
+					subout := v.flattenProtoMessage(elt.Message())
 					for k, v := range subout {
 						name := fmt.Sprintf("%s.%s", fieldName(key), string(k))
 						out[biscuit.String(name)] = v
 					}
 				}
 			case protoreflect.GroupKind: // deprecated proto2 feature
-				return nil, errors.New("authorization: group fields are not supported")
+				v.logger.Warn("group field is not supported", zap.String("field", fieldName(key)))
 			default:
-				return nil, fmt.Errorf("authorization: unsupported protoreflect kind: %v", field.Kind())
+				v.logger.Warn("unsupported proto kind",
+					zap.String("field", fieldName(key)),
+					zap.String("kind", field.Kind().String()),
+				)
 			}
 		}
 	}
-	return out, nil
+	return out
 }

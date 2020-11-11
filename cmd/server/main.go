@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"demo/pkg/antireplay"
 	"demo/pkg/authorization"
 	"demo/pkg/pb"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -55,7 +57,8 @@ func main() {
 		panic(err)
 	}
 
-	i, err := authorization.NewBiscuitInterceptor(rootPubKey, logger.Named("biscuit-interceptor"))
+	antiReplay := antireplay.NewChecker(antireplay.NewRAMStore(), 5*time.Second, 60*time.Minute)
+	i, err := authorization.NewBiscuitServerInterceptor(rootPubKey, antiReplay, logger.Named("biscuit-interceptor"))
 	if err != nil {
 		panic(err)
 	}

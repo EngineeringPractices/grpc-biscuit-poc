@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/x509"
+	"demo/pkg/antireplay"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -27,29 +28,31 @@ var ErrNotAuthorized = status.Error(codes.PermissionDenied, "not authorized")
 
 const MetadataAuthorization = "authorization"
 
-type BiscuitInterceptor interface {
+type BiscuitServerInterceptor interface {
 	Unary(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error)
 	Stream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error
 }
 
-type biscuitInterceptor struct {
-	logger *zap.Logger
-	pubkey sig.PublicKey
+type biscuitServerInterceptor struct {
+	logger     *zap.Logger
+	pubkey     sig.PublicKey
+	antiReplay antireplay.Checker
 }
 
-func NewBiscuitInterceptor(rootPubKey []byte, logger *zap.Logger) (BiscuitInterceptor, error) {
+func NewBiscuitServerInterceptor(rootPubKey []byte, antiReplay antireplay.Checker, logger *zap.Logger) (BiscuitServerInterceptor, error) {
 	pubkey, err := sig.NewPublicKey(rootPubKey)
 	if err != nil {
 		return nil, err
 	}
 
-	return &biscuitInterceptor{
-		logger: logger,
-		pubkey: pubkey,
+	return &biscuitServerInterceptor{
+		logger:     logger,
+		antiReplay: antiReplay,
+		pubkey:     pubkey,
 	}, nil
 }
 
-func (i *biscuitInterceptor) Unary(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+func (i *biscuitServerInterceptor) Unary(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 	verifier, err := i.newVerifierFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -62,7 +65,7 @@ func (i *biscuitInterceptor) Unary(ctx context.Context, req interface{}, info *g
 	return handler(ctx, req)
 }
 
-func (i *biscuitInterceptor) Stream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+func (i *biscuitServerInterceptor) Stream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	verifier, err := i.newVerifierFromCtx(ss.Context())
 	if err != nil {
 		return err
@@ -75,11 +78,12 @@ func (i *biscuitInterceptor) Stream(srv interface{}, ss grpc.ServerStream, info 
 }
 
 type grpcVerifier struct {
-	biscuit.Verifier
-	logger *zap.Logger
+	verifier   biscuit.Verifier
+	antiReplay antireplay.Checker
+	logger     *zap.Logger
 }
 
-func (i *biscuitInterceptor) newVerifierFromCtx(ctx context.Context) (*grpcVerifier, error) {
+func (i *biscuitServerInterceptor) newVerifierFromCtx(ctx context.Context) (*grpcVerifier, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, errors.New("authorization: failed to retrieve context metadata")
@@ -104,8 +108,9 @@ func (i *biscuitInterceptor) newVerifierFromCtx(ctx context.Context) (*grpcVerif
 	}
 
 	return &grpcVerifier{
-		Verifier: verifier,
-		logger:   i.logger,
+		verifier:   verifier,
+		logger:     i.logger,
+		antiReplay: i.antiReplay,
 	}, nil
 }
 
@@ -127,7 +132,7 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 		Name: "method",
 		IDs:  []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.String(methodName)},
 	}}
-	v.AddFact(methodFact)
+	v.verifier.AddFact(methodFact)
 	debugFacts = append(debugFacts, methodFact.String())
 
 	for name, value := range fields {
@@ -135,7 +140,7 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 			Name: "arg",
 			IDs:  []biscuit.Atom{biscuit.Symbol("ambient"), name, value},
 		}}
-		v.AddFact(argFact)
+		v.verifier.AddFact(argFact)
 		debugFacts = append(debugFacts, argFact.String())
 	}
 	v.logger.Debug("flattened proto request", zap.Strings("facts", debugFacts))
@@ -150,15 +155,15 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 	}
 
 	var signatureMetas *signedbiscuit.UserSignatureMetadata
-	v.Verifier, signatureMetas, err = signedbiscuit.WithSignatureVerification(v.Verifier, "http://audience.local", audiencePubKey.(*ecdsa.PublicKey))
+	v.verifier, signatureMetas, err = signedbiscuit.WithSignatureVerification(v.verifier, "http://audience.local", audiencePubKey.(*ecdsa.PublicKey))
 	if err != nil {
 		return fmt.Errorf("failed to create signature: %w", err)
 	}
 
-	if err := v.Verify(); err != nil {
+	if err := v.verifier.Verify(); err != nil {
 		v.logger.Warn("failed to verify biscuit",
 			zap.Error(err),
-			zap.String("world", v.PrintWorld()),
+			zap.String("world", v.verifier.PrintWorld()),
 			zap.Strings("ambient-facts", debugFacts),
 		)
 		return ErrNotAuthorized
@@ -173,7 +178,12 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 		zap.Binary("signatureNonce", signatureMetas.UserSignatureNonce),
 	)
 
-	return nil
+	// Anti replay verifications using signatureMetas
+	return v.antiReplay.Check(antireplay.Nonce{
+		UserEmail: signatureMetas.UserEmail,
+		Value:     signatureMetas.UserSignatureNonce,
+		CreatedAt: signatureMetas.UserSignatureTimestamp,
+	})
 }
 
 func (v *grpcVerifier) flattenProtoMessage(msg protoreflect.Message) map[biscuit.String]biscuit.Atom {

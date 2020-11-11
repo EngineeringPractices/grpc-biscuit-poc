@@ -17,7 +17,6 @@ import (
 	"github.com/flynn/biscuit-go/parser"
 	"github.com/flynn/biscuit-go/sig"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -70,18 +69,27 @@ var attenuationCaveat = `[
 ]`
 
 func main() {
+	rootPubBytes, err := ioutil.ReadFile("./root.public.demo.key")
+	if err != nil {
+		panic(err)
+	}
+	userPrivKeyBytes, err := ioutil.ReadFile("./user.private.demo.key")
+	if err != nil {
+		panic(err)
+	}
+
 	for _, role := range []string{"guest", "developer", "admin"} {
-		token, err := login(role)
+		baseToken, err := login(role)
 		if err != nil {
 			panic(err)
 		}
 
-		token, err = signToken(token)
+		clientInterceptor, err := authorization.NewBiscuitClientInterceptor(rootPubBytes, userPrivKeyBytes, baseToken)
 		if err != nil {
 			panic(err)
 		}
 
-		testAuthorization(role, token)
+		testAuthorization(clientInterceptor, role)
 	}
 
 	// try out attenuation
@@ -94,18 +102,20 @@ func main() {
 		panic(err)
 	}
 
-	attToken, err = signToken(attToken)
+	clientInterceptor, err := authorization.NewBiscuitClientInterceptor(rootPubBytes, userPrivKeyBytes, attToken)
 	if err != nil {
 		panic(err)
 	}
 
-	testAuthorization("attenuated", attToken)
+	testAuthorization(clientInterceptor, "attenuated")
 }
 
-func testAuthorization(role string, token string) {
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithInsecure())
-	conn, err := grpc.Dial("localhost:8888", opts...)
+func testAuthorization(clientInterceptor authorization.BiscuitClientInterceptor, role string) {
+	conn, err := grpc.Dial("localhost:8888",
+		grpc.WithInsecure(),
+		grpc.WithUnaryInterceptor(clientInterceptor.Unary),
+		grpc.WithStreamInterceptor(clientInterceptor.Stream),
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -113,9 +123,7 @@ func testAuthorization(role string, token string) {
 
 	c := pb.NewDemoClient(conn)
 
-	md := metadata.Pairs("authorization", token)
-	ctx := metadata.NewOutgoingContext(context.Background(), md)
-
+	ctx := context.Background()
 	_, err = c.Status(ctx, &pb.StatusRequest{})
 	printStatus(role, "ANY", "Status", err)
 
@@ -286,40 +294,4 @@ func attenuate(token string) (string, error) {
 	}
 
 	return base64.URLEncoding.EncodeToString(ser), nil
-}
-
-func signToken(token string) (string, error) {
-	decToken, err := base64.URLEncoding.DecodeString(token)
-	if err != nil {
-		return "", err
-	}
-
-	rootPubBytes, err := ioutil.ReadFile("./root.public.demo.key")
-	if err != nil {
-		return "", err
-	}
-	rootPubKey, err := sig.NewPublicKey(rootPubBytes)
-	if err != nil {
-		return "", err
-	}
-
-	userPrivKeyBytes, err := ioutil.ReadFile("./user.private.demo.key")
-	if err != nil {
-		return "", err
-	}
-	userPrivKey, err := x509.ParseECPrivateKey(userPrivKeyBytes)
-	if err != nil {
-		return "", err
-	}
-	userKeypair, err := signedbiscuit.NewECDSAKeyPair(userPrivKey)
-	if err != nil {
-		return "", err
-	}
-
-	signedToken, err := signedbiscuit.Sign(decToken, rootPubKey, userKeypair)
-	if err != nil {
-		return "", err
-	}
-
-	return base64.URLEncoding.EncodeToString(signedToken), nil
 }

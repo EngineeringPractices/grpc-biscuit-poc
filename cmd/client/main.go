@@ -30,7 +30,7 @@ var adminPolicy = []string{
 	// allow Create, Read, Update, Delete with no conditions
 	`*allow_method($0)
 	<-	method(#ambient, $0)
-	@ 	$0 in ["/demo.api.v1.Demo/Create", "/demo.api.v1.Demo/Read", "/demo.api.v1.Demo/Update", "/demo.api.v1.Demo/Delete"]`,
+	@ 	$0 in ["Create", "Read", "Update", "Delete"]`,
 }
 
 var developerPolicy = []string{
@@ -38,29 +38,29 @@ var developerPolicy = []string{
 	`*allow_method($0)
 		<-	method(#ambient, $0), 
 			arg(#ambient, "env", $1) 
-		@ 	$0 in ["/demo.api.v1.Demo/Create", "/demo.api.v1.Demo/Delete"], 
+		@ 	$0 in ["Create", "Delete"], 
 			$1 == "DEV"`,
 	// allow Read and Update in dev or staging
 	`*allow_method($0)
 		<-	method(#ambient, $0),
 			arg(#ambient, "env", $1)
-		@ 	$0 in ["/demo.api.v1.Demo/Read", "/demo.api.v1.Demo/Update"],
+		@ 	$0 in ["Read", "Update"],
 			$1 in ["DEV", "STG"]`,
 	// allow Read in prod when for entity1, entity2, and entity3
-	`*allow_method($0)
-		<- 	method(#ambient, $0),
+	`*allow_method("Read")
+		<- 	service(#ambient, "demo.api.v1.Demo"),
+			method(#ambient, "Read"),
 			arg(#ambient, "env", $1),
 			arg(#ambient, "entities.name", $2)
-		@	$0 in ["/demo.api.v1.Demo/Read"],
-			$1 == "PRD",
+		@	$1 == "PRD",
 			$2 any of ["entity1", "entity2", "entity3"]`,
 }
 
 var guestPolicy = []string{
 	// allow Status with no conditions
-	`*allow_method($0)
-		<-	method(#ambient, $0) 
-		@ 	$0 == "/demo.api.v1.Demo/Status"`,
+	`*allow_method("Status")
+		<-	service(#ambient, "demo.api.v1.Demo"),
+			method(#ambient, "Status")`,
 }
 
 var attenuationCaveat = `[

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"strings"
 
 	"github.com/flynn/biscuit-go"
 	"github.com/flynn/biscuit-go/cookbook/signedbiscuit"
@@ -114,7 +115,8 @@ func (i *biscuitServerInterceptor) newVerifierFromCtx(ctx context.Context) (*grp
 	}, nil
 }
 
-func (v *grpcVerifier) verify(methodName string, req interface{}) error {
+// fullMethod must be the full RPC method string, i.e., /package.service/method.
+func (v *grpcVerifier) verify(fullMethod string, req interface{}) error {
 	var fields map[biscuit.String]biscuit.Atom
 
 	if req != nil {
@@ -127,10 +129,23 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 	}
 
 	debugFacts := make([]string, 0, len(fields)+1)
-	// Add request method and arguments to the verifier
+
+	split := strings.Split(fullMethod, "/")
+	if len(split) != 3 {
+		return errors.New("authorization: failed to split fullMethod")
+	}
+
+	// Add request service, method and arguments to the verifier
+	serviceFact := biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "service",
+		IDs:  []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.String(split[1])},
+	}}
+	v.verifier.AddFact(serviceFact)
+	debugFacts = append(debugFacts, serviceFact.String())
+
 	methodFact := biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "method",
-		IDs:  []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.String(methodName)},
+		IDs:  []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.String(split[2])},
 	}}
 	v.verifier.AddFact(methodFact)
 	debugFacts = append(debugFacts, methodFact.String())

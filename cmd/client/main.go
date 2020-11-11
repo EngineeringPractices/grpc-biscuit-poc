@@ -38,17 +38,23 @@ var developerPolicy = []string{
 	// allow Create, Delete if env is dev
 	`*allow_method($0)
 		<-	method(#ambient, $0), 
-			arg(#ambient, $1, $2) 
+			arg(#ambient, "env", $1) 
 		@ 	$0 in ["/demo.api.v1.Demo/Create", "/demo.api.v1.Demo/Delete"], 
-			$1 == "env", 
-			$2 == "DEV"`,
+			$1 == "DEV"`,
 	// allow Read and Update in dev or staging
 	`*allow_method($0)
 		<-	method(#ambient, $0),
-			arg(#ambient, $1, $2)
+			arg(#ambient, "env", $1)
 		@ 	$0 in ["/demo.api.v1.Demo/Read", "/demo.api.v1.Demo/Update"],
-			$1 == "env",
-			$2 in ["DEV", "STG"]`,
+			$1 in ["DEV", "STG"]`,
+	// allow Read in prod when for entity1, entity2, and entity3
+	`*allow_method($0)
+		<- 	method(#ambient, $0),
+			arg(#ambient, "env", $1),
+			arg(#ambient, "entities.name", $2)
+		@	$0 in ["/demo.api.v1.Demo/Read"],
+			$1 == "PRD",
+			$2 any of ["entity1", "entity2", "entity3"]`,
 }
 
 var guestPolicy = []string{
@@ -59,9 +65,8 @@ var guestPolicy = []string{
 }
 
 var attenuationCaveat = `[
-	*allow_dev($1, $2) <- arg(#ambient, $1, $2)
-		@ 	$1 == "env",
-			$2 == "DEV"
+	*allow_dev($1) <- arg(#ambient, "env", $1)
+		@ 	$1 == "DEV"
 ]`
 
 func main() {
@@ -125,11 +130,12 @@ func testAuthorization(role string, token string) {
 	for envName, env := range pb.Env_value {
 		_, err := c.Read(ctx, &pb.ReadRequest{
 			Env:        pb.Env(env),
-			Names:      []string{"entity1"},
+			Names:      []string{"entity1", "entity2"},
 			ExpireTime: timestamppb.New(time.Now()),
 			Stuff:      map[string]*pb.Entity{"foo42": {Name: "foo", Value: 42}, "bar31": {Name: "bar", Value: 31}},
 			Stuff2:     map[int64]*pb.Entity{1: {Name: "foo", Value: 42}, 2: {Name: "bar", Value: 31}},
 			Stuff3:     map[bool]*pb.Entity{true: {Name: "foo", Value: 42}, false: {Name: "bar", Value: 31}},
+			Entities:   []*pb.Entity{{Name: "entity1", Value: 1}, {Name: "entity2", Value: 2}, {Name: "entity3", Value: 3}},
 		})
 		printStatus(role, envName, "Read", err)
 	}

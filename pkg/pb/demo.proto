@@ -41,6 +41,7 @@ message ReadRequest {
   map<int64, Entity> stuff2 = 4;
   map<bool, Entity> stuff3 = 5;
   google.protobuf.Timestamp expire_time = 6;
+  repeated Entity entities = 7;
 }
 
 message UpdateRequest {

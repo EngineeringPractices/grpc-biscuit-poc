@@ -138,6 +138,7 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 		v.AddFact(argFact)
 		debugFacts = append(debugFacts, argFact.String())
 	}
+	v.logger.Debug("flattened proto request", zap.Strings("facts", debugFacts))
 
 	audiencePubKeyBytes, err := ioutil.ReadFile("./audience.public.demo.key")
 	if err != nil {
@@ -176,23 +177,16 @@ func (v *grpcVerifier) verify(methodName string, req interface{}) error {
 }
 
 func (v *grpcVerifier) flattenProtoMessage(msg protoreflect.Message) map[biscuit.String]biscuit.Atom {
+	out := make(flattenedMessage)
+
 	fields := msg.Descriptor().Fields()
-	out := make(map[biscuit.String]biscuit.Atom)
 	for i := 0; i < fields.Len(); i++ {
 		field := fields.Get(i)
 
 		var elts map[interface{}]protoreflect.Value
 		var fieldName func(key interface{}) string
+
 		switch {
-		case field.IsList():
-			list := msg.Get(field).List()
-			elts = make(map[interface{}]protoreflect.Value, list.Len())
-			for i := 0; i < list.Len(); i++ {
-				elts[i] = list.Get(i)
-			}
-			fieldName = func(key interface{}) string {
-				return fmt.Sprintf("%s.%d", field.Name(), key)
-			}
 		case field.IsMap():
 			m := msg.Get(field).Map()
 			elts = make(map[interface{}]protoreflect.Value, m.Len())
@@ -213,68 +207,59 @@ func (v *grpcVerifier) flattenProtoMessage(msg protoreflect.Message) map[biscuit
 		for key, elt := range elts {
 			switch field.Kind() {
 			case protoreflect.BoolKind:
-				if elt.Bool() {
-					out[biscuit.String(fieldName(key))] = biscuit.Integer(1)
-				} else {
-					out[biscuit.String(fieldName(key))] = biscuit.Integer(0)
-				}
-			case protoreflect.EnumKind:
-				// swap the enum value to its name from the definition
-				// and use it as a string on biscuit side
-				out[biscuit.String(fieldName(key))] = biscuit.String(field.Enum().Values().ByNumber(elt.Enum()).Name())
-			case protoreflect.Int32Kind:
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.Sint32Kind:
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.Uint32Kind:
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Uint())
-			case protoreflect.Int64Kind:
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.Sint64Kind:
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.Uint64Kind:
-				if elt.Uint() > math.MaxInt64 {
-					v.logger.Warn("uint64 field does not fit in int64", zap.String("field", fieldName(key)))
-					continue
-				}
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.Sfixed32Kind:
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.Fixed32Kind:
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Uint())
-			case protoreflect.FloatKind:
-				v.logger.Warn("float field is not supported", zap.String("field", fieldName(key)))
-			case protoreflect.Sfixed64Kind:
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.Fixed64Kind:
-				if elt.Uint() > math.MaxInt64 {
-					v.logger.Warn("uint64 field does not fit in int64", zap.String("field", fieldName(key)))
-					continue
-				}
-				out[biscuit.String(fieldName(key))] = biscuit.Integer(elt.Int())
-			case protoreflect.DoubleKind:
-				v.logger.Warn("double field is not supported", zap.String("field", fieldName(key)))
-			case protoreflect.StringKind:
-				out[biscuit.String(fieldName(key))] = biscuit.String(elt.String())
-			case protoreflect.BytesKind:
-				out[biscuit.String(fieldName(key))] = biscuit.Bytes(elt.Bytes())
-			case protoreflect.MessageKind:
-				switch elt.Message().Descriptor().FullName() {
-				case "google.protobuf.Timestamp":
-					ts := elt.Message().Interface().(*timestamppb.Timestamp)
-					out[biscuit.String(fieldName(key))] = biscuit.Date(ts.AsTime())
-				default:
-					// recurse until we only get basic types
-					// concatenating sub field name with parent field name
-					subout := v.flattenProtoMessage(elt.Message())
-					for k, v := range subout {
-						name := fmt.Sprintf("%s.%s", fieldName(key), string(k))
-						out[biscuit.String(name)] = v
+				valuesIterator(field, elt, func(e protoreflect.Value) {
+					if e.Bool() {
+						out.Insert(biscuit.String(fieldName(key)), biscuit.Integer(1))
+					} else {
+						out.Insert(biscuit.String(fieldName(key)), biscuit.Integer(0))
 					}
-				}
-			case protoreflect.GroupKind: // deprecated proto2 feature
-				v.logger.Warn("group field is not supported", zap.String("field", fieldName(key)))
+				})
+			case protoreflect.EnumKind:
+				valuesIterator(field, elt, func(e protoreflect.Value) {
+					// swap the enum value to its name from the definition and use it as a string on biscuit side
+					out.Insert(biscuit.String(fieldName(key)), biscuit.String(field.Enum().Values().ByNumber(e.Enum()).Name()))
+				})
+			case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind, protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+				valuesIterator(field, elt, func(e protoreflect.Value) {
+					out.Insert(biscuit.String(fieldName(key)), biscuit.Integer(e.Int()))
+				})
+			case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
+				valuesIterator(field, elt, func(e protoreflect.Value) {
+					out.Insert(biscuit.String(fieldName(key)), biscuit.Integer(e.Int()))
+				})
+			case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+				valuesIterator(field, elt, func(e protoreflect.Value) {
+					if e.Uint() > math.MaxInt64 {
+						v.logger.Warn("uint64 field does not fit in int64", zap.String("field", fieldName(key)))
+						return
+					}
+					out.Insert(biscuit.String(fieldName(key)), biscuit.Integer(e.Int()))
+				})
+			case protoreflect.StringKind:
+				valuesIterator(field, elt, func(e protoreflect.Value) {
+					out.Insert(biscuit.String(fieldName(key)), biscuit.String(e.String()))
+				})
+			case protoreflect.BytesKind:
+				valuesIterator(field, elt, func(e protoreflect.Value) {
+					out.Insert(biscuit.String(fieldName(key)), biscuit.Bytes(e.Bytes()))
+				})
+			case protoreflect.MessageKind:
+				valuesIterator(field, elt, func(e protoreflect.Value) {
+					switch e.Message().Descriptor().FullName() {
+					case "google.protobuf.Timestamp":
+						ts := e.Message().Interface().(*timestamppb.Timestamp)
+						out.Insert(biscuit.String(fieldName(key)), biscuit.Date(ts.AsTime()))
+					default:
+						// recurse until we only get basic types concatenating sub field name with parent field name
+						subout := v.flattenProtoMessage(e.Message())
+						for k, v := range subout {
+							name := fmt.Sprintf("%s.%s", fieldName(key), string(k))
+							out.Insert(biscuit.String(name), v)
+						}
+					}
+				})
 			default:
+				// Float, Double, Group...
 				v.logger.Warn("unsupported proto kind",
 					zap.String("field", fieldName(key)),
 					zap.String("kind", field.Kind().String()),
@@ -282,5 +267,38 @@ func (v *grpcVerifier) flattenProtoMessage(msg protoreflect.Message) map[biscuit
 			}
 		}
 	}
+
 	return out
+}
+
+type flattenedMessage map[biscuit.String]biscuit.Atom
+
+// Insert add the value to the map, at key index. If a value with this key already exists, it will create a
+// biscuit.List and add the original and new values to it. Other inserts at this key will keep appending to the list.
+// When the key doesn't exists, the original value is stored in the map.
+func (f flattenedMessage) Insert(key biscuit.String, value biscuit.Atom) {
+	if v, keyExists := f[key]; keyExists {
+		if l, isList := v.(biscuit.List); isList {
+			f[key] = append(l, value)
+		} else {
+			f[key] = biscuit.List{v, value}
+		}
+
+		return
+	}
+
+	f[key] = value
+}
+
+// valuesIterator calls cb for every field values (once for regular types, N for repeated types)
+func valuesIterator(field protoreflect.FieldDescriptor, element protoreflect.Value, cb func(e protoreflect.Value)) {
+	if field.IsList() {
+		list := element.List()
+		for i := 0; i < list.Len(); i++ {
+			cb(list.Get(i))
+		}
+		return
+	}
+
+	cb(element)
 }

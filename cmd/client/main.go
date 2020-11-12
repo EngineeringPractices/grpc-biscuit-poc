@@ -53,7 +53,7 @@ var developerPolicy = []string{
 			arg(#ambient, "env", $1),
 			arg(#ambient, "entities.name", $2)
 		@	$1 == "PRD",
-			$2 any of ["entity1", "entity2", "entity3"]`,
+			$2 in ["entity1", "entity2", "entity3"]`,
 }
 
 var guestPolicy = []string{

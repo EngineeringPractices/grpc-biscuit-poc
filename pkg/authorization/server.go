@@ -303,10 +303,10 @@ type flattenedMessage map[biscuit.String]biscuit.Atom
 // When the key doesn't exists, the original value is stored in the map.
 func (f flattenedMessage) Insert(key biscuit.String, value biscuit.Atom) {
 	if v, keyExists := f[key]; keyExists {
-		if l, isList := v.(biscuit.List); isList {
+		if l, isSet := v.(biscuit.Set); isSet {
 			f[key] = append(l, value)
 		} else {
-			f[key] = biscuit.List{v, value}
+			f[key] = biscuit.Set{v, value}
 		}
 
 		return

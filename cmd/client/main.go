@@ -29,8 +29,8 @@ var caveats = []string{
 var adminPolicy = []string{
 	// allow Create, Read, Update, Delete with no conditions
 	`*allow_method($0)
-	<-	method(#ambient, $0)
-	@ 	$0 in ["Create", "Read", "Update", "Delete"]`,
+		<-	method(#ambient, $0)
+		@ 	$0 in ["Create", "Read", "Update", "Delete"]`,
 }
 
 var developerPolicy = []string{

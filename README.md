@@ -1,11 +1,6 @@
 # Biscuit GRPC POC
 
-/!\ This repo requires WIP features on biscuit-go, best is to clone biscuit-go locally, create a poc-demo branch and merge all open PR in it.
-Then add in go.mod:
-
-```
-replace github.com/flynn/biscuit-go => /path/to/your/biscuit-go
-```
+**/!\ Requires WIP features on biscuit-go, its version in go.mod file point to a tmp branch merging them all**
 
 This repo provides utility packages:
 

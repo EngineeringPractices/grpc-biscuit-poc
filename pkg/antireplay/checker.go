@@ -3,7 +3,6 @@ package antireplay
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -51,7 +50,6 @@ func (c *checker) Check(nonce Nonce) error {
 		if n.CreatedAt.Before(now.Add(-c.nonceMaxAge)) {
 			continue
 		}
-		fmt.Printf("Check replay for %s: %x | %x: %v\n", nonce.UserEmail, nonce.Value, n.Value, bytes.Equal(n.Value, nonce.Value))
 		if bytes.Equal(n.Value, nonce.Value) {
 			return ErrReplay
 		}

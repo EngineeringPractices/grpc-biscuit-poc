@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"demo/pkg/authorization"
 	"demo/pkg/pb"
+	"demo/pkg/policy"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -14,59 +15,11 @@ import (
 
 	"github.com/flynn/biscuit-go"
 	"github.com/flynn/biscuit-go/cookbook/signedbiscuit"
-	"github.com/flynn/biscuit-go/parser"
 	"github.com/flynn/biscuit-go/sig"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-var caveats = []string{
-	// require an authority allow_method fact to have been generated
-	`*authorized() <- allow_method(#authority, $0)`,
-}
-
-var adminPolicy = []string{
-	// allow Create, Read, Update, Delete with no conditions
-	`*allow_method($0)
-		<-	method(#ambient, $0)
-		@ 	$0 in ["Create", "Read", "Update", "Delete"]`,
-}
-
-var developerPolicy = []string{
-	// allow Create, Delete if env is dev
-	`*allow_method($0)
-		<-	method(#ambient, $0), 
-			arg(#ambient, "env", $1) 
-		@ 	$0 in ["Create", "Delete"], 
-			$1 == "DEV"`,
-	// allow Read and Update in dev or staging
-	`*allow_method($0)
-		<-	method(#ambient, $0),
-			arg(#ambient, "env", $1)
-		@ 	$0 in ["Read", "Update"],
-			$1 in ["DEV", "STG"]`,
-	// allow Read in prod when for entity1, entity2, and entity3
-	`*allow_method("Read")
-		<- 	service(#ambient, "demo.api.v1.Demo"),
-			method(#ambient, "Read"),
-			arg(#ambient, "env", $1),
-			arg(#ambient, "entities.name", $2)
-		@	$1 == "PRD",
-			$2 in ["entity1", "entity2", "entity3"]`,
-}
-
-var guestPolicy = []string{
-	// allow Status with no conditions
-	`*allow_method("Status")
-		<-	service(#ambient, "demo.api.v1.Demo"),
-			method(#ambient, "Status")`,
-}
-
-var attenuationCaveat = `[
-	*allow_dev($1) <- arg(#ambient, "env", $1)
-		@ 	$1 == "DEV"
-]`
 
 func main() {
 	rootPubBytes, err := ioutil.ReadFile("./root.public.demo.key")
@@ -78,7 +31,7 @@ func main() {
 		panic(err)
 	}
 
-	for _, role := range []string{"guest", "developer", "admin"} {
+	for _, role := range []string{"guest", "auditor", "developer", "admin"} {
 		baseToken, err := login(role)
 		if err != nil {
 			panic(err)
@@ -91,23 +44,6 @@ func main() {
 
 		testAuthorization(clientInterceptor, role)
 	}
-
-	// try out attenuation
-	devToken, err := login("developer")
-	if err != nil {
-		panic(err)
-	}
-	attToken, err := attenuate(devToken)
-	if err != nil {
-		panic(err)
-	}
-
-	clientInterceptor, err := authorization.NewBiscuitClientInterceptor(rootPubBytes, userPrivKeyBytes, attToken)
-	if err != nil {
-		panic(err)
-	}
-
-	testAuthorization(clientInterceptor, "attenuated")
 }
 
 func testAuthorization(clientInterceptor authorization.BiscuitClientInterceptor, role string) {
@@ -199,6 +135,15 @@ func login(role string) (string, error) {
 		return "", err
 	}
 
+	definition, err := ioutil.ReadFile("./demo-v1-Demo.policy")
+	if err != nil {
+		return "", err
+	}
+	policies, err := policy.Parse(string(definition))
+	if err != nil {
+		return "", err
+	}
+
 	audience := "http://audience.local"
 	audiencePrivKeyBytes, err := ioutil.ReadFile("./audience.private.demo.key")
 	if err != nil {
@@ -209,19 +154,11 @@ func login(role string) (string, error) {
 		return "", err
 	}
 
-	var rules []string
-	switch role {
-	case "admin":
-		rules = append(guestPolicy, developerPolicy...)
-		rules = append(rules, adminPolicy...)
-	case "developer":
-		rules = append(guestPolicy, developerPolicy...)
-	case "guest":
-		rules = guestPolicy
-	default:
-		return "", fmt.Errorf("unknown role: %s", role)
+	rolePolicy, ok := policies[role]
+	if !ok {
+		return "", fmt.Errorf("no policy defined for role %s", role)
 	}
-
+	fmt.Printf("Policy for %s: %#v\n", role, rolePolicy)
 	builder := biscuit.NewBuilder(rand.Reader, root)
 	builder, err = signedbiscuit.WithSignableFacts(builder, audience, audiencePrivKey, userPubKey, time.Now().Add(5*time.Minute), &signedbiscuit.Metadata{
 		ClientID:  "",
@@ -233,14 +170,13 @@ func login(role string) (string, error) {
 		return "", err
 	}
 
-	p := parser.New()
-	for _, r := range rules {
-		if err := builder.AddAuthorityRule(p.Must().Rule(r)); err != nil {
+	for _, r := range rolePolicy.Rules {
+		if err := builder.AddAuthorityRule(r); err != nil {
 			return "", nil
 		}
 	}
-	for _, c := range caveats {
-		if err := builder.AddAuthorityCaveat(p.Must().Rule(c)); err != nil {
+	for _, c := range rolePolicy.Caveats {
+		if err := builder.AddAuthorityCaveat(c); err != nil {
 			return "", nil
 		}
 	}
@@ -251,44 +187,6 @@ func login(role string) (string, error) {
 	}
 
 	ser, err := bisc.Serialize()
-	if err != nil {
-		return "", err
-	}
-
-	return base64.URLEncoding.EncodeToString(ser), nil
-}
-
-// testAttenuation simulate a developer attenuating his token
-// to only allows operations on DEV environment and forbid STAGING
-func attenuate(token string) (string, error) {
-	rng := rand.Reader
-	rootKey := sig.GenerateKeypair(rng)
-
-	newToken, err := base64.URLEncoding.DecodeString(token)
-	if err != nil {
-		return "", err
-	}
-
-	newBiscuit, err := biscuit.Unmarshal(newToken)
-	if err != nil {
-		return "", err
-	}
-
-	builder := newBiscuit.CreateBlock()
-
-	p := parser.New()
-
-	newCaveat := p.Must().Caveat(attenuationCaveat)
-	if err := builder.AddCaveat(newCaveat); err != nil {
-		return "", err
-	}
-
-	attenuatedNewBiscuit, err := newBiscuit.Append(rng, rootKey, builder.Build())
-	if err != nil {
-		return "", err
-	}
-
-	ser, err := attenuatedNewBiscuit.Serialize()
 	if err != nil {
 		return "", err
 	}

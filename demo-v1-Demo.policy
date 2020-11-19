@@ -1,0 +1,63 @@
+policy "admin" {
+    rules {
+        *allow_method($method)
+            <-  service(#ambient, "demo.api.v1.Demo"),
+                method(#ambient, $method)
+            @   $method in ["Status", "Create", "Read", "Update", "Delete"]
+    }
+
+    caveats {
+        [*authorized($method) <- allow_method(#authority, $method)]
+    }
+}
+
+policy "developer" {
+    rules {
+        *allow_method("Status")
+            <-  service(#ambient, "demo.api.v1.Demo"),
+                method(#ambient, "Status")
+        *allow_method($method)
+            <-  service(#ambient, "demo.api.v1.Demo"),
+                method(#ambient, $method),
+                arg(#ambient, "env", "DEV")
+            @   $method in ["Create", "Delete"]
+
+        *allow_method($method)
+            <-  service(#ambient, "demo.api.v1.Demo"),
+                method(#ambient, $method),
+                arg(#ambient, "env", $env)
+            @   $method in ["Read", "Update"],
+                $env in ["DEV", "STG"]
+
+        *allow_method("Read")
+            <-  service(#ambient, "demo.api.v1.Demo"),
+                method(#ambient, "Read"),
+                arg(#ambient, "env", "PRD"),
+                arg(#ambient, "entities.name", $entityNames)
+            @  $entityNames in ["entity1", "entity2", "entity3"]
+    }
+    
+    caveats {
+        [*authorized($method) <- allow_method(#authority, $method)]
+    }
+}
+
+policy "guest" {
+    rules {
+        *allow_method("Status")
+            <-  service(#ambient, "demo.api.v1.Demo"),
+                method(#ambient, "Status")
+    }
+
+    caveats {
+        [*authorized($method) <- allow_method(#authority, $method)]
+    }
+}
+
+policy "auditor" {
+    rules {}
+
+    caveats {
+        [*allow_dev() <- arg(#ambient, "env", "DEV")]
+    }
+}

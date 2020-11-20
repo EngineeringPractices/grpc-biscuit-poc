@@ -215,8 +215,8 @@ func (v *grpcVerifier) flattenProtoMessage(msg protoreflect.Message) map[biscuit
 		case field.IsMap():
 			m := msg.Get(field).Map()
 			elts = make(map[interface{}]protoreflect.Value, m.Len())
-			m.Range(func(mk protoreflect.MapKey, v protoreflect.Value) bool {
-				elts[mk.Interface()] = v
+			m.Range(func(mk protoreflect.MapKey, value protoreflect.Value) bool {
+				elts[mk.Interface()] = value
 				return true
 			})
 			fieldName = func(key interface{}) string {
@@ -244,9 +244,13 @@ func (v *grpcVerifier) flattenProtoMessage(msg protoreflect.Message) map[biscuit
 					// swap the enum value to its name from the definition and use it as a string on biscuit side
 					out.Insert(biscuit.String(fieldName(key)), biscuit.String(field.Enum().Values().ByNumber(e.Enum()).Name()))
 				})
-			case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind, protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+			case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
 				valuesIterator(field, elt, func(e protoreflect.Value) {
 					out.Insert(biscuit.String(fieldName(key)), biscuit.Integer(e.Int()))
+				})
+			case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+				valuesIterator(field, elt, func(e protoreflect.Value) {
+					out.Insert(biscuit.String(fieldName(key)), biscuit.Integer(e.Uint()))
 				})
 			case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 				valuesIterator(field, elt, func(e protoreflect.Value) {
@@ -258,7 +262,7 @@ func (v *grpcVerifier) flattenProtoMessage(msg protoreflect.Message) map[biscuit
 						v.logger.Warn("uint64 field does not fit in int64", zap.String("field", fieldName(key)))
 						return
 					}
-					out.Insert(biscuit.String(fieldName(key)), biscuit.Integer(e.Int()))
+					out.Insert(biscuit.String(fieldName(key)), biscuit.Integer(e.Uint()))
 				})
 			case protoreflect.StringKind:
 				valuesIterator(field, elt, func(e protoreflect.Value) {
@@ -277,9 +281,9 @@ func (v *grpcVerifier) flattenProtoMessage(msg protoreflect.Message) map[biscuit
 					default:
 						// recurse until we only get basic types concatenating sub field name with parent field name
 						subout := v.flattenProtoMessage(e.Message())
-						for k, v := range subout {
+						for k, value := range subout {
 							name := fmt.Sprintf("%s.%s", fieldName(key), string(k))
-							out.Insert(biscuit.String(name), v)
+							out.Insert(biscuit.String(name), value)
 						}
 					}
 				})

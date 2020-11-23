@@ -3,14 +3,14 @@ package antireplay
 import "time"
 
 type Nonce struct {
-	UserEmail string
+	ID        string
 	Value     []byte
 	CreatedAt time.Time
 }
 
 type Store interface {
 	Insert(nonce Nonce) error
-	Get(userEmail string) ([]Nonce, error)
+	Get(ID string) ([]Nonce, error)
 }
 
 type ramStore struct {
@@ -26,10 +26,10 @@ func (s *ramStore) Insert(nonce Nonce) error {
 	return nil
 }
 
-func (s *ramStore) Get(userEmail string) ([]Nonce, error) {
+func (s *ramStore) Get(id string) ([]Nonce, error) {
 	var userNonces []Nonce
 	for _, n := range s.store {
-		if n.UserEmail == userEmail {
+		if n.ID == id {
 			userNonces = append(userNonces, n)
 		}
 	}

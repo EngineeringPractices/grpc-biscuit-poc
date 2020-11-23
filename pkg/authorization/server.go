@@ -195,7 +195,7 @@ func (v *grpcVerifier) verify(fullMethod string, req interface{}) error {
 
 	// Anti replay verifications using signatureMetas
 	return v.antiReplay.Check(antireplay.Nonce{
-		UserEmail: signatureMetas.UserEmail,
+		ID:        signatureMetas.UserEmail,
 		Value:     signatureMetas.UserSignatureNonce,
 		CreatedAt: signatureMetas.UserSignatureTimestamp,
 	})

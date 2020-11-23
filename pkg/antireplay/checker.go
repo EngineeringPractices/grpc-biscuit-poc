@@ -40,7 +40,7 @@ func (c *checker) Check(nonce Nonce) error {
 		return ErrNonceOOB
 	}
 
-	existingNonces, err := c.store.Get(nonce.UserEmail)
+	existingNonces, err := c.store.Get(nonce.ID)
 	if err != nil {
 		return err
 	}

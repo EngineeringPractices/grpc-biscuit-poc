@@ -45,7 +45,7 @@ func main() {
 		log.Fatalf("failed to load definitions: %v", err)
 	}
 
-	policies, err := policy.Parse(string(definitions))
+	policies, err := policy.Parse(strings.NewReader(string(definitions)))
 	if err != nil {
 		log.Fatalf("failed to parse definition: %v", err)
 	}
@@ -101,7 +101,7 @@ func main() {
 
 func getVerifier(policy policy.Policy) (biscuit.Verifier, error) {
 	rootKey := sig.GenerateKeypair(rand.Reader)
-	builder := biscuit.NewBuilder(rand.Reader, rootKey)
+	builder := biscuit.NewBuilder(rootKey)
 	for _, r := range policy.Rules {
 		if err := builder.AddAuthorityRule(r); err != nil {
 			return nil, fmt.Errorf("failed to add rule %q: %v", r, err)

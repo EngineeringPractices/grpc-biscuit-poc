@@ -3,7 +3,7 @@ policy "admin" {
         *allow_method($0)
             <-  service(#ambient, "demo.api.v1.Demo"),
                 method(#ambient, $0)
-            @   $0 in ["Create", "Delete", "Read", "Status", "Update"]
+            @   $0 in ["Status"]
     }
 
     caveats {[
@@ -37,13 +37,13 @@ policy "developer" {
             <-  service(#ambient, "demo.api.v1.Demo"),
                 method(#ambient, $0),
                 arg(#ambient, "env", "DEV")
-            @   $0 in ["Create", "Delete"]
+            @   $0 in ["Create", "Delete", "Read", "Status", "Update"]
         *allow_method($0)
             <-  service(#ambient, "demo.api.v1.Demo"),
                 method(#ambient, $0),
                 arg(#ambient, "env", $1)
-            @   $0 in ["Read", "Update"],
-                $1 in ["DEV", "STG"]
+            @   $0 in ["Read"],
+                $1 in ["DEV"]
         *allow_method("Read")
             <-  service(#ambient, "demo.api.v1.Demo"),
                 method(#ambient, "Read"),

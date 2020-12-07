@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/flynn/biscuit-go"
@@ -8,78 +9,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReplaceNamedVariables(t *testing.T) {
-	definitions := `
-		*allow_method($method)
-			<-	method(#ambient, $method), 
-				arg(#ambient, "env", $env) 
-			@ 	$method in ["Create", "Delete"], 
-				$env == "DEV"
-		*allow_method($method)
-			<-	method(#ambient, $method),
-				arg(#ambient, "env", $env)
-			@ 	$method in ["Read", "Update"],
-				$env in ["DEV", "STG"]
-		*allow_method("Read")
-			<- 	service(#ambient, "demo.api.v1.Demo"),
-				method(#ambient, "Read"),
-				arg(#ambient, "env", $env),
-				arg(#ambient, "entities.name", $entityNames)
-			@	$env == "PRD",
-				$entityNames in ["entity1", "entity2", "entity3"]`
-
-	expected := `
-		*allow_method($0)
-			<-	method(#ambient, $0), 
-				arg(#ambient, "env", $1) 
-			@ 	$0 in ["Create", "Delete"], 
-				$1 == "DEV"
-		*allow_method($0)
-			<-	method(#ambient, $0),
-				arg(#ambient, "env", $1)
-			@ 	$0 in ["Read", "Update"],
-				$1 in ["DEV", "STG"]
-		*allow_method("Read")
-			<- 	service(#ambient, "demo.api.v1.Demo"),
-				method(#ambient, "Read"),
-				arg(#ambient, "env", $1),
-				arg(#ambient, "entities.name", $2)
-			@	$1 == "PRD",
-				$2 in ["entity1", "entity2", "entity3"]`
-
-	replaced, err := replaceNamedVariables(definitions)
-	require.NoError(t, err)
-	require.Equal(t, expected, replaced)
-}
-
 func TestParse(t *testing.T) {
 	definition := `
 		policy "admin" {
 			rules {
-				*authorized($namespace) 
-					<- namespace(#ambient, $namespace)
-					@  prefix($namespace, "demo.v1")
+				*authorized($0) 
+					<- namespace(#ambient, $0)
+					@  prefix($0, "demo.v1")
 			}
 			caveats {
-				[*caveat0($namespace) <- authorized($namespace)]
+				[*caveat0($0) <- authorized($0)]
 			}
 		}
 		
 		policy "developer" {
 			rules {
-				*authorized("demo.v1.Account", $method) 
+				*authorized("demo.v1.Account", $1) 
 					<- 	namespace(#ambient, "demo.v1.Account"),
-						method(#ambient, $method),
-						arg(#ambient, "env", $env)
-					@	$method in ["Create", "Read", "Update"],
-						$env in ["DEV", "STAGING"]
+						method(#ambient, $1),
+						arg(#ambient, "env", $2)
+					@	$1 in ["Create", "Read", "Update"],
+						$2 in ["DEV", "STAGING"]
 				*authorized("demo.v1.Account", "Read")
 					<- 	namespace(#ambient, "demo.v1.Account"),
 						method(#ambient, "Read"),
 						arg(#ambient, "env", "PROD")
 			}
 			caveats {
-				[*caveat1($method) <- authorized("demo.v1.Account", $method)]
+				[*caveat1($1) <- authorized("demo.v1.Account", $1)]
 			}
 		}
 		
@@ -96,7 +53,7 @@ func TestParse(t *testing.T) {
 		}
 	`
 
-	policies, err := Parse(definition)
+	policies, err := Parse(strings.NewReader(definition))
 	require.NoError(t, err)
 
 	expectedPolicies := map[string]Policy{
@@ -104,20 +61,20 @@ func TestParse(t *testing.T) {
 			Name: "admin",
 			Rules: []biscuit.Rule{
 				{
-					Head: biscuit.Predicate{Name: "authorized", IDs: []biscuit.Atom{biscuit.Variable(0)}},
+					Head: biscuit.Predicate{Name: "authorized", IDs: []biscuit.Atom{biscuit.Variable("0")}},
 					Body: []biscuit.Predicate{
-						{Name: "namespace", IDs: []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.Variable(0)}},
+						{Name: "namespace", IDs: []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.Variable("0")}},
 					},
 					Constraints: []biscuit.Constraint{
-						{Name: biscuit.Variable(0), Checker: biscuit.StringComparisonChecker{Comparison: datalog.StringComparisonPrefix, Str: "demo.v1"}},
+						{Name: biscuit.Variable("0"), Checker: biscuit.StringComparisonChecker{Comparison: datalog.StringComparisonPrefix, Str: "demo.v1"}},
 					},
 				},
 			},
 			Caveats: []biscuit.Caveat{{Queries: []biscuit.Rule{
 				{
-					Head: biscuit.Predicate{Name: "caveat0", IDs: []biscuit.Atom{biscuit.Variable(0)}},
+					Head: biscuit.Predicate{Name: "caveat0", IDs: []biscuit.Atom{biscuit.Variable("0")}},
 					Body: []biscuit.Predicate{
-						{Name: "authorized", IDs: []biscuit.Atom{biscuit.Variable(0)}},
+						{Name: "authorized", IDs: []biscuit.Atom{biscuit.Variable("0")}},
 					},
 					Constraints: []biscuit.Constraint{},
 				},
@@ -127,15 +84,15 @@ func TestParse(t *testing.T) {
 			Name: "developer",
 			Rules: []biscuit.Rule{
 				{
-					Head: biscuit.Predicate{Name: "authorized", IDs: []biscuit.Atom{biscuit.String("demo.v1.Account"), biscuit.Variable(1)}},
+					Head: biscuit.Predicate{Name: "authorized", IDs: []biscuit.Atom{biscuit.String("demo.v1.Account"), biscuit.Variable("1")}},
 					Body: []biscuit.Predicate{
 						{Name: "namespace", IDs: []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.String("demo.v1.Account")}},
-						{Name: "method", IDs: []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.Variable(1)}},
-						{Name: "arg", IDs: []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.String("env"), biscuit.Variable(2)}},
+						{Name: "method", IDs: []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.Variable("1")}},
+						{Name: "arg", IDs: []biscuit.Atom{biscuit.Symbol("ambient"), biscuit.String("env"), biscuit.Variable("2")}},
 					},
 					Constraints: []biscuit.Constraint{
-						{Name: biscuit.Variable(1), Checker: biscuit.StringInChecker{Set: map[biscuit.String]struct{}{"Create": {}, "Read": {}, "Update": {}}}},
-						{Name: biscuit.Variable(2), Checker: biscuit.StringInChecker{Set: map[biscuit.String]struct{}{"DEV": {}, "STAGING": {}}}},
+						{Name: biscuit.Variable("1"), Checker: biscuit.StringInChecker{Set: map[biscuit.String]struct{}{"Create": {}, "Read": {}, "Update": {}}}},
+						{Name: biscuit.Variable("2"), Checker: biscuit.StringInChecker{Set: map[biscuit.String]struct{}{"DEV": {}, "STAGING": {}}}},
 					},
 				},
 				{
@@ -150,9 +107,9 @@ func TestParse(t *testing.T) {
 			},
 			Caveats: []biscuit.Caveat{{Queries: []biscuit.Rule{
 				{
-					Head: biscuit.Predicate{Name: "caveat1", IDs: []biscuit.Atom{biscuit.Variable(1)}},
+					Head: biscuit.Predicate{Name: "caveat1", IDs: []biscuit.Atom{biscuit.Variable("1")}},
 					Body: []biscuit.Predicate{
-						{Name: "authorized", IDs: []biscuit.Atom{biscuit.String("demo.v1.Account"), biscuit.Variable(1)}},
+						{Name: "authorized", IDs: []biscuit.Atom{biscuit.String("demo.v1.Account"), biscuit.Variable("1")}},
 					},
 					Constraints: []biscuit.Constraint{},
 				},

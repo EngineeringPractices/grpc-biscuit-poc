@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/x509"
 	"demo/pkg/authorization"
 	"demo/pkg/pb"
@@ -11,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"strings"
 	"time"
 
 	"github.com/flynn/biscuit-go"
@@ -139,7 +139,7 @@ func login(role string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	policies, err := policy.Parse(string(definition))
+	policies, err := policy.Parse(strings.NewReader(string(definition)))
 	if err != nil {
 		return "", err
 	}
@@ -159,7 +159,7 @@ func login(role string) (string, error) {
 		return "", fmt.Errorf("no policy defined for role %s", role)
 	}
 	fmt.Printf("Policy for %s: %#v\n", role, rolePolicy)
-	builder := biscuit.NewBuilder(rand.Reader, root)
+	builder := biscuit.NewBuilder(root)
 	builder, err = signedbiscuit.WithSignableFacts(builder, audience, audiencePrivKey, userPubKey, time.Now().Add(5*time.Minute), &signedbiscuit.Metadata{
 		ClientID:  "",
 		IssueTime: time.Now(),
